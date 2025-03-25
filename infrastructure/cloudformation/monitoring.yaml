@@ -1,0 +1,131 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM Policy Monitor - Core Monitoring Infrastructure'
+
+Resources:
+  # CloudTrail for capturing IAM events
+  MonitoringTrail:
+    Type: 'AWS::CloudTrail::Trail'
+    Properties:
+      IsLogging: true
+      S3BucketName: !Ref CloudTrailBucket
+      EventSelectors:
+        - ReadWriteType: WriteOnly
+          IncludeManagementEvents: true
+      TrailName: IAMPolicyMonitorTrail
+
+  # S3 bucket for CloudTrail logs
+  CloudTrailBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub 'iam-policy-monitor-logs-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+
+  # S3 bucket policy to allow CloudTrail to write logs
+  CloudTrailBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref CloudTrailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !Sub 'arn:aws:s3:::${CloudTrailBucket}'
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub 'arn:aws:s3:::${CloudTrailBucket}/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+
+  # EventBridge rule to capture IAM policy changes
+  IAMPolicyChangeRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: 'Captures IAM policy changes'
+      EventPattern:
+        source:
+          - aws.iam
+        detail-type:
+          - 'AWS API Call via CloudTrail'
+        detail:
+          eventSource:
+            - iam.amazonaws.com
+          eventName:
+            - CreatePolicy
+            - DeletePolicy
+            - CreatePolicyVersion
+            - DeletePolicyVersion
+            - AttachRolePolicy
+            - DetachRolePolicy
+            - AttachUserPolicy
+            - DetachUserPolicy
+            - AttachGroupPolicy
+            - DetachGroupPolicy
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt IAMChangeProcessorFunction.Arn
+          Id: IAMChangeProcessor
+
+  # Lambda function to process IAM policy changes
+  IAMChangeProcessorFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: IAMPolicyChangeProcessor
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs18.x
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            console.log('Received IAM policy change event:', JSON.stringify(event));
+            // TODO: Process event and store in DynamoDB
+            return {
+              statusCode: 200,
+              body: JSON.stringify('Event processed successfully'),
+            };
+          };
+      Timeout: 30
+
+  # IAM role for Lambda execution
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+
+  # Permission for EventBridge to invoke Lambda
+  LambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref IAMChangeProcessorFunction
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt IAMPolicyChangeRule.Arn
+
+Outputs:
+  CloudTrailBucketName:
+    Description: 'Name of the S3 bucket storing CloudTrail logs'
+    Value: !Ref CloudTrailBucket
+
+  MonitoringTrailName:
+    Description: 'Name of the CloudTrail trail'
+    Value: !Ref MonitoringTrail
+
+  IAMChangeProcessorFunction:
+    Description: 'Lambda function processing IAM changes'
+    Value: !Ref IAMChangeProcessorFunction

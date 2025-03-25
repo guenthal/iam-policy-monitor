@@ -1,0 +1,43 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM Policy Monitor - Storage Infrastructure'
+
+Resources:
+  # DynamoDB table for storing IAM policy changes
+  IAMChangesTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: IAMPolicyChanges
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: EventId
+          AttributeType: S
+        - AttributeName: EventTime
+          AttributeType: S
+        - AttributeName: ResourceType
+          AttributeType: S
+      KeySchema:
+        - AttributeName: EventId
+          KeyType: HASH
+        - AttributeName: EventTime
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: ResourceTypeIndex
+          KeySchema:
+            - AttributeName: ResourceType
+              KeyType: HASH
+            - AttributeName: EventTime
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ExpirationTime
+        Enabled: true
+
+Outputs:
+  IAMChangesTableName:
+    Description: 'Name of the DynamoDB table storing IAM changes'
+    Value: !Ref IAMChangesTable
+
+  IAMChangesTableArn:
+    Description: 'ARN of the DynamoDB table storing IAM changes'
+    Value: !GetAtt IAMChangesTable.Arn
